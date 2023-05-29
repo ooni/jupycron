@@ -1,0 +1,17 @@
+Source: jupycron
+Section: python
+Priority: optional
+Maintainer: Federico Ceratto <federico@debian.org>
+Rules-Requires-Root: no
+Build-Depends:
+ debhelper-compat (= 13),
+Standards-Version: 4.6.2
+Homepage: https://github.com/ooni/jupycron
+
+Package: jupycron
+Architecture: all
+Depends:
+ ${misc:Depends},
+Description: Schedule automated runs for Jupyter Notebook
+ Runs any notebook at regular intervals and stores the output as an HTML file.
+ Provides a simple dashboard.
