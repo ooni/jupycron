@@ -9,7 +9,6 @@
 
 from datetime import datetime
 from pathlib import Path
-import pathlib
 import hashlib
 import json
 import logging
@@ -241,7 +240,7 @@ def main():
         try:
             conf = extract_jupycron_conf(nb)
             if conf is None:
-                log.debug(f"Skpping {nb}")
+                log.debug(f"Not running {nb}")
                 run_history[nb_rel.as_posix()] = ("", "not run", 0)
                 continue
 
@@ -249,6 +248,9 @@ def main():
                 tstamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
                 res, elapsed = run_notebook(nb, conf)
                 run_history[nb_rel.as_posix()] = (tstamp, res, elapsed)
+                log.debug(f"Running     {nb}")
+            else:
+                log.debug(f"Not running {nb}")
 
         except Exception as e:
             log.error(e)
