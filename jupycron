@@ -9,6 +9,7 @@
 
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, List, Tuple
 import hashlib
 import json
 import logging
@@ -32,7 +33,7 @@ except ImportError:
     log.addHandler(logging.StreamHandler())
 
 
-def load_history() -> None:
+def load_history() -> dict:
     fn = DEFAULT_OUTPUT_PATH / ".history.json"
     try:
         with fn.open() as f:
@@ -49,7 +50,7 @@ def save_history(j: dict) -> None:
     log.debug(f"{fn} written")
 
 
-def extract_jupycron_conf(nb: Path):
+def extract_jupycron_conf(nb: Path) -> Optional[dict]:
     assert nb.is_file()
     # Hacky but fast extractor
     read_data = 0
@@ -63,8 +64,8 @@ def extract_jupycron_conf(nb: Path):
                 lb = line.find(b"{")
                 rb = line.rfind(b"}")
                 line = line[lb : rb + 1]
-                line = line.decode("unicode_escape")
-                return json.loads(line)
+                line_str = line.decode("unicode_escape")
+                return json.loads(line_str)
             except Exception:
                 pass
 
@@ -72,6 +73,7 @@ def extract_jupycron_conf(nb: Path):
         if read_data > 500_000:
             return None
 
+    return None
     # cmd = ["jupyter-nbconvert", "--to", "python", "--stdout", nb.as_posix()]
     # py = subprocess.check_output(cmd, timeout=5)
     # out = py.decode().splitlines()
@@ -85,7 +87,7 @@ def extract_jupycron_conf(nb: Path):
 time_lookup = {"min": 60, "hour": 3600, "day": 86400, "week": 604800, "month": 2628000}
 
 
-def time_to_run(conf):
+def time_to_run(conf: dict) -> bool:
     try:
         num, dimension = conf.get("every", "").split()
         dimension = dimension.rstrip("s")
@@ -96,13 +98,13 @@ def time_to_run(conf):
     return int(time.time()) % seconds == 0
 
 
-def generate_unit_name(nb):
+def generate_unit_name(nb: Path) -> str:
     hash_ = nb.as_posix().encode()
-    hash_ = hashlib.sha224(hash_).hexdigest()[:10]
-    return nb.stem.replace(" ", "_") + "-" + hash_
+    hash_str_ = hashlib.sha224(hash_).hexdigest()[:10]
+    return nb.stem.replace(" ", "_") + "-" + hash_str_
 
 
-def run_notebook(nb, conf):
+def run_notebook(nb: Path, conf: dict) -> Tuple[str, float]:
     elapsed = 0.0
     htmlfn = nb.with_suffix(".html").as_posix()
     htmlfn = htmlfn.replace(
@@ -149,7 +151,7 @@ def run_notebook(nb, conf):
     return (res, elapsed)
 
 
-def list_ipynb_files() -> list:
+def list_ipynb_files() -> List[Path]:
     out = []
     for nb in DEFAULT_NOTEBOOK_PATH.glob("**/*autorun*.ipynb"):
         # Skip hidden files
@@ -160,7 +162,7 @@ def list_ipynb_files() -> list:
     return out
 
 
-def update_history(run_history, history):
+def update_history(run_history: dict, history: dict) -> None:
     nbs = history.get("notebooks", {})
     for nb in tuple(nbs.keys()):
         if nb not in run_history:
@@ -173,7 +175,7 @@ def update_history(run_history, history):
     history["notebooks"] = nbs
 
 
-def generate_summary(history: dict):
+def generate_summary(history: dict) -> None:
     env = jinja2.Environment()
     tpl = env.from_string(
         """
