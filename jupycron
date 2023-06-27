@@ -221,7 +221,8 @@ def generate_summary(history: History) -> None:
         <th>Status</th>
         <th>Last run time</th>
         <th>Interval</th>
-        <th>Name</th>
+        <th>Source</th>
+        <th>Output</th>
         <th>Run duration</th>
     </tr>
     {% for nb, (tstamp, status, every, elapsed) in hist %}
@@ -237,8 +238,8 @@ def generate_summary(history: History) -> None:
       {% endif %}
       <td>{{ tstamp }}</td>
       <td>{{ every }}</td>
-      <td><a href=/notebooks/notebooks/{{ nb }}>{{ nb }}</a>
-      </td>
+      <td><a href=/notebooks/notebooks/{{ nb }}>{{ nb[:-6] }}</a></td>
+      <td><a href=/view/notebooks/jupycron/{{ nb.replace(".ipynb", ".html") }}>out</a></td>
       <td>{{ elapsed|round(2) }}</td>
     </tr>
     {% endfor %}
