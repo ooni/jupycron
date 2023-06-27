@@ -9,7 +9,7 @@
 
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 import hashlib
 import json
 import logging
@@ -32,19 +32,23 @@ try:
 except ImportError:
     log.addHandler(logging.StreamHandler())
 
+# fn -> timestamp, status, every, elapsed time
+History = Dict[str, Tuple[str, str, str, float]]
 
-def load_history() -> dict:
+
+def load_history() -> History:
     fn = DEFAULT_OUTPUT_PATH / ".history.json"
     try:
         with fn.open() as f:
             j = json.load(f)
+        return j["notebooks"]
     except Exception:
-        j = {}
-    return j
+        return {}
 
 
-def save_history(j: dict) -> None:
+def save_history(history: History) -> None:
     fn = DEFAULT_OUTPUT_PATH / ".history.json"
+    j = dict(notebooks=history)
     with fn.open("w") as f:
         json.dump(j, f)
     log.debug(f"{fn} written")
@@ -84,18 +88,27 @@ def extract_jupycron_conf(nb: Path) -> Optional[dict]:
     #     return json.loads(conf)
 
 
-time_lookup = {"min": 60, "hour": 3600, "day": 86400, "week": 604800, "month": 2628000}
+time_lookup = {
+    "min": 1,
+    "minute": 1,
+    "hour": 60,
+    "day": 1440,
+    "week": 10080,
+    "month": 43800.0,
+}
 
 
-def time_to_run(conf: dict) -> bool:
+def time_to_run(conf: dict) -> Tuple[bool, str]:
     try:
-        num, dimension = conf.get("every", "").split()
+        every = conf.get("every", "")
+        num, dimension = every.split()
         dimension = dimension.rstrip("s")
-        seconds = int(float(num) * time_lookup[dimension])
-    except Exception:
-        # todo: log
-        return False
-    return int(time.time()) % seconds == 0
+        minutes = int(float(num) * time_lookup[dimension])
+    except Exception as e:
+        log.debug(f"Error {e} Unable to parse: {every}")
+        return False, "Parse error"
+    flag = int(time.time() / 60) % minutes == 0
+    return flag, every
 
 
 def generate_unit_name(nb: Path) -> str:
@@ -142,13 +155,13 @@ def run_notebook(nb: Path, conf: dict) -> Tuple[str, float]:
         elapsed = time.perf_counter() - t0
         out = p.decode()
         log.info(f"{unitname} output:\n{out}")
-        res = "success"
+        status = "success"
     except subprocess.CalledProcessError as e:
         log.info(f"Error in {unitname}. Output:\n{e.output.decode()}")
-        res = "failed"
+        status = "failed"
 
     log.info(f"{unitname} done")
-    return (res, elapsed)
+    return (status, elapsed)
 
 
 def list_ipynb_files() -> List[Path]:
@@ -159,24 +172,27 @@ def list_ipynb_files() -> List[Path]:
             continue
         out.append(nb)
 
-    return out
+    return sorted(out)
 
 
-def update_history(run_history: dict, history: dict) -> None:
-    nbs = history.get("notebooks", {})
-    for nb in tuple(nbs.keys()):
+def update_history(run_history: History, history: History) -> None:
+    """Merges new events into history dict"""
+    for nb in tuple(history.keys()):
         if nb not in run_history:
             log.debug(f"Discarding deleted notebook {nb}")
-            nbs.pop(nb)
+            history.pop(nb)
 
     for nb, data in run_history.items():
-        nbs[nb] = data
+        (tstamp, status, every, elapsed) = data
+        if status == "not_run" and nb in history:
+            pass
+        else:
+            history[nb] = data
 
-    history["notebooks"] = nbs
 
-
-def generate_summary(history: dict) -> None:
+def generate_summary(history: History) -> None:
     env = jinja2.Environment()
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     tpl = env.from_string(
         """
 <!DOCTYPE html>
@@ -193,7 +209,9 @@ def generate_summary(history: dict) -> None:
         box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
         border-spacing: 10px;
     }
-
+    p#gen {
+        padding-left: 20em;
+    }
   </style>
 </head>
 
@@ -202,57 +220,66 @@ def generate_summary(history: dict) -> None:
     <tr>
         <th>Status</th>
         <th>Last run time</th>
+        <th>Interval</th>
         <th>Name</th>
         <th>Run duration</th>
     </tr>
-    {% for nb, (tstamp, res, elapsed) in notebooks.items() %}
+    {% for nb, (tstamp, status, every, elapsed) in hist %}
     <tr>
-      {% if res == 'success': %}
+      {% if status == 'success': %}
       <td>🟢</td>
-      {% elif res == 'failed': %}
+      {% elif status == 'failed': %}
       <td>🔴</td>
+      {% elif status == 'not_run': %}
+      <td>⌛</td>
       {% else %}
       <td>🛇</td>
       {% endif %}
       <td>{{ tstamp }}</td>
+      <td>{{ every }}</td>
       <td><a href=/notebooks/notebooks/{{ nb }}>{{ nb }}</a>
       </td>
       <td>{{ elapsed|round(2) }}</td>
     </tr>
     {% endfor %}
   </table>
+  <p id="gen">Generated at {{ now }}</p>
 </body>
 </html>
 """
     )
-    html = tpl.render(notebooks=history["notebooks"])
-
+    html = tpl.render(hist=sorted(history.items()), now=now)
     fn = DEFAULT_OUTPUT_PATH / "summary.html"
     fn.write_text(html)
     log.debug(f"{fn} written")
 
 
-def main():
+def main() -> None:
     history = load_history()
     notebooks = list_ipynb_files()
     log.debug(f"Found {len(notebooks)} notebooks")
-    run_history = {}
+    run_history: History = {}  # fn -> timestamp, status, elapsed time
     for nb in notebooks:
         nb_rel = nb.relative_to(DEFAULT_NOTEBOOK_PATH)
         try:
             conf = extract_jupycron_conf(nb)
+            tstamp = ""
+            elapsed = 0.0
             if conf is None:
-                log.debug(f"Not running {nb}")
-                run_history[nb_rel.as_posix()] = ("", "not run", 0)
-                continue
-
-            if time_to_run(conf):
-                tstamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-                res, elapsed = run_notebook(nb, conf)
-                run_history[nb_rel.as_posix()] = (tstamp, res, elapsed)
-                log.debug(f"Running     {nb}")
+                log.debug(f"Not enabled {nb_rel}")
+                status = "disabled"
+                every = ""
             else:
-                log.debug(f"Not running {nb}")
+                run_now, every = time_to_run(conf)
+                if run_now:
+                    tstamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+                    log.debug(f"Running     {nb_rel}")
+                    status, elapsed = run_notebook(nb, conf)
+                else:
+                    log.debug(f"Not running {nb_rel}")
+                    status = "not_run"
+
+            run_history[nb_rel.as_posix()] = (tstamp, status, every, elapsed)
 
         except Exception as e:
             log.error(e)
